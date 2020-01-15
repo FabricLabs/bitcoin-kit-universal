@@ -1,4 +1,4 @@
-# BitcoinKit-iOS
+# BitcoinKit-Universal
 
 Bitcoin, BitcoinCash(ABC) and Dash wallet toolkit for Swift. This is a full implementation of SPV node including wallet creation/restore, synchronization with network, send/receive transactions, and more. The repository includes the main `BitcoinCore.swift` and `BitcoinKit.swift`, `BitcoinCashKit.swift` and `DashKit.swift` separate pods.
 
@@ -262,6 +262,7 @@ bitcoinKit.delegateQueue = DispatchQueue.main
 * Xcode 10.0+
 * Swift 5+
 * iOS 11+
+* OSX 10.14+
 
 ## Installation
 
@@ -304,9 +305,9 @@ All features of the library are used in example project. It can be referred as a
 
 ## Dependencies
 
-* [HSHDWalletKit](https://github.com/horizontalsystems/hd-wallet-kit-ios) - HD Wallet related features, mnemonic phrase generation.
-* [OpenSslKit.swift](https://github.com/horizontalsystems/open-ssl-kit-ios) - Crypto functions required for working with blockchain.
-* [Secp256k1Kit.swift](https://github.com/horizontalsystems/secp256k1-kit-ios) - Crypto functions required for working with blockchain.
+* [HSHDWalletKit-Universal](https://github.com/horizontalsystems/hd-wallet-kit-ios) - HD Wallet related features, mnemonic phrase generation.
+* [OpenSslKit-Universal.swift](https://github.com/horizontalsystems/open-ssl-kit-ios) - Crypto functions required for working with blockchain.
+* [Secp256k1Kit-Universal.swift](https://github.com/horizontalsystems/secp256k1-kit-ios) - Crypto functions required for working with blockchain.
 
 ### Dash dependencies
 
@@ -315,5 +316,5 @@ All features of the library are used in example project. It can be referred as a
 
 ## License
 
-The `BitcoinKit-iOS` toolkit is open source and available under the terms of the [MIT License](https://github.com/horizontalsystems/bitcoin-kit-ios/blob/master/LICENSE).
+The `BitcoinKit-Universal` toolkit is open source and available under the terms of the [MIT License](https://github.com/horizontalsystems/bitcoin-kit-ios/blob/master/LICENSE).
 
