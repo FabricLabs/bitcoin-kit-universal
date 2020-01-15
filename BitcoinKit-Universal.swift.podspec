@@ -25,7 +25,7 @@ BitcoinKit implements Bitcoin protocol in Swift.
   s.requires_arc = true
 
   s.dependency 'BitcoinCore-Universal.swift', '~> 0.13.2'
-  s.dependency 'Hodler.swift', '~> 0.13.2'
+  s.dependency 'Hodler-Universal.swift', '~> 0.13.2'
   s.dependency 'OpenSslKit-Universal.swift', '~> 1.0.1'
   s.dependency 'Secp256k1Kit-Universal.swift', '~> 1.0.1'
   s.dependency 'HdWalletKit-Universal.swift', '~> 1.5'
