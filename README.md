@@ -1,6 +1,6 @@
 # BitcoinKit-Universal
 
-Bitcoin, BitcoinCash(ABC) and Dash wallet toolkit for Swift. This is a full implementation of SPV node including wallet creation/restore, synchronization with network, send/receive transactions, and more. The repository includes the main `BitcoinCore.swift` and `BitcoinKit.swift`, `BitcoinCashKit.swift` and `DashKit.swift` separate pods.
+Bitcoin, BitcoinCash(ABC) and Dash wallet toolkit for Swift. This is a full implementation of SPV node including wallet creation/restore, synchronization with network, send/receive transactions, and more. The repository includes the main `BitcoinCore-Universal.swift` and `BitcoinKit-Universal.swift`, `BitcoinCashKit-Universal.swift` and `DashKit-Universal.swift` separate pods.
 
 
 ## Features
@@ -12,21 +12,21 @@ Bitcoin, BitcoinCash(ABC) and Dash wallet toolkit for Swift. This is a full impl
 - [BIP44](https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki) multi-account hierarchy for deterministic wallets.
 - [BIP21](https://github.com/bitcoin/bips/blob/master/bip-0021.mediawiki) URI schemes, which include payment address, amount, label and other params
 
-### BitcoinKit.swift
+### BitcoinKit-Universal.swift
 - Send/Receive Segwit transactions (*P2WPKH*)
 - Send/Receive Segwit transactions compatible with legacy wallets (*P2WPKH-SH*)
 - base58, bech32
 
-### BitcoinCashKit.swift
+### BitcoinCashKit-Universal.swift
 - bech32 cashaddr addresses
 
-### DashKit.swift
+### DashKit-Universal.swift
 - Instant send
 - LLMQ lock, Masternodes validation
 
 ## Usage
 
-On this page, we'll use *Kits* to refer to one of `BitcoinKit.swift`, `BitcoinCashKit.swift` and `DashKit.swift` kits.
+On this page, we'll use *Kits* to refer to one of `BitcoinKit-Universal.swift`, `BitcoinCashKit-Universal.swift` and `DashKit-Universal.swift` kits.
 
 ### Initialization
 
@@ -284,10 +284,10 @@ platform :ios, '10.0'
 use_frameworks!
 
 target '<Your Target Name>' do
-  pod 'BitcoinCore.swift'
-  pod 'BitcoinKit.swift'
-  pod 'BitcoinCashKit.swift'
-  pod 'DashKit.swift'
+  pod 'BitcoinCore-Universal.swift'
+  pod 'BitcoinKit-Universal.swift'
+  pod 'BitcoinCashKit-Universal.swift'
+  pod 'DashKit-Universal.swift'
 end
 ```
 
