@@ -1,7 +1,7 @@
 Pod::Spec.new do |s|
   s.name             = 'BitcoinKit-Universal.swift'
   s.module_name      = 'BitcoinKit'
-  s.version          = '0.13.2'
+  s.version          = '0.13.3'
   s.summary          = 'Bitcoin library for Swift. Supports iOS & OSX'
 
   s.description      = <<-DESC
