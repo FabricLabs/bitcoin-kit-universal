@@ -1,7 +1,8 @@
 Pod::Spec.new do |s|
   s.name             = 'BitcoinCore-Universal.swift'
   s.module_name      = 'BitcoinCore'
-  s.version          = '0.13.4'
+
+  s.version          = '0.13.6'
   s.summary          = 'Core library Bitcoin derived wallets for Swift. Supports iOS & OSX'
 
   s.description      = <<-DESC
