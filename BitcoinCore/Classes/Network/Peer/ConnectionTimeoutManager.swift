@@ -1,4 +1,5 @@
 import Foundation
+import HsToolKit
 
 class ConnectionTimeoutManager: IConnectionTimeoutManager {
 
@@ -27,7 +28,7 @@ class ConnectionTimeoutManager: IConnectionTimeoutManager {
     func timePeriodPassed(peer: IPeer) {
         if let lastPingTime = lastPingTime {
             if (dateGenerator().timeIntervalSince1970 - lastPingTime > pingTimeout) {
-                logger?.error("Timed out. Closing connection", context: peer.logName)
+                logger?.error("Timed out. Closing connection", context: [peer.logName])
                 peer.disconnect(error: TimeoutError.pingTimedOut)
             }
 
@@ -36,7 +37,7 @@ class ConnectionTimeoutManager: IConnectionTimeoutManager {
 
         if let  messageLastReceivedTime = messageLastReceivedTime {
             if (dateGenerator().timeIntervalSince1970 - messageLastReceivedTime > maxIdleTime) {
-                logger?.debug("Timed out. Closing connection", context: peer.logName)
+                logger?.debug("Timed out. Closing connection", context: [peer.logName])
                 peer.sendPing(nonce: UInt64.random(in: 0..<UINT64_MAX))
                 lastPingTime = dateGenerator().timeIntervalSince1970
             }

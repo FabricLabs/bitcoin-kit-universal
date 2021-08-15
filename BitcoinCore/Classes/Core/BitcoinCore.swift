@@ -1,13 +1,10 @@
 import Foundation
 import HdWalletKit
+import HsToolKit
 import BigInt
 import RxSwift
 
 public class BitcoinCore {
-    public static let heightInterval = 2016                                    // Default block count in difficulty change circle ( Bitcoin )
-    public static let targetSpacing = 10 * 60                                  // Time to mining one block ( 10 min. Bitcoin )
-    public static let maxTargetBits = 0x1d00ffff                               // Initially and max. target difficulty for blocks
-
     private let storage: IStorage
     private let cache: OutputsCache
     private var dataProvider: IDataProvider
@@ -16,7 +13,6 @@ public class BitcoinCore {
     private let addressConverter: AddressConverterChain
     private let restoreKeyConverterChain: RestoreKeyConverterChain
     private let unspentOutputSelector: UnspentOutputSelectorChain
-    private let kitStateProvider: IKitStateProvider & ISyncStateListener
 
     private let transactionCreator: ITransactionCreator
     private let transactionFeeCalculator: ITransactionFeeCalculator
@@ -32,23 +28,16 @@ public class BitcoinCore {
     private let bip: Bip
 
     private let peerManager: IPeerManager
-    private let errorStorage: ErrorStorage
 
     // START: Extending
 
     public let peerGroup: IPeerGroup
     public let initialBlockDownload: IInitialBlockDownload
-    public let syncedReadyPeerManager: ISyncedReadyPeerManager
     public let transactionSyncer: ITransactionSyncer
 
     let bloomFilterLoader: BloomFilterLoader
-    let blockValidatorChain: BlockValidatorChain
     let inventoryItemsHandlerChain = InventoryItemsHandlerChain()
     let peerTaskHandlerChain = PeerTaskHandlerChain()
-
-    public func add(blockValidator: IBlockValidator) {
-        blockValidatorChain.add(blockValidator: blockValidator)
-    }
 
     public func add(inventoryItemsHandler: IInventoryItemsHandler) {
         inventoryItemsHandlerChain.add(handler: inventoryItemsHandler)
@@ -94,28 +83,24 @@ public class BitcoinCore {
     public weak var delegate: BitcoinCoreDelegate?
 
     init(storage: IStorage, cache: OutputsCache, dataProvider: IDataProvider,
-         peerGroup: IPeerGroup, initialBlockDownload: IInitialBlockDownload, bloomFilterLoader: BloomFilterLoader,
-         syncedReadyPeerManager: ISyncedReadyPeerManager, transactionSyncer: ITransactionSyncer,
-         blockValidatorChain: BlockValidatorChain, publicKeyManager: IPublicKeyManager, addressConverter: AddressConverterChain, restoreKeyConverterChain: RestoreKeyConverterChain,
-         unspentOutputSelector: UnspentOutputSelectorChain, kitStateProvider: IKitStateProvider & ISyncStateListener,
+         peerGroup: IPeerGroup, initialBlockDownload: IInitialBlockDownload, bloomFilterLoader: BloomFilterLoader, transactionSyncer: ITransactionSyncer,
+         publicKeyManager: IPublicKeyManager, addressConverter: AddressConverterChain, restoreKeyConverterChain: RestoreKeyConverterChain,
+         unspentOutputSelector: UnspentOutputSelectorChain,
          transactionCreator: ITransactionCreator, transactionFeeCalculator: ITransactionFeeCalculator, dustCalculator: IDustCalculator,
          paymentAddressParser: IPaymentAddressParser, networkMessageParser: NetworkMessageParser, networkMessageSerializer: NetworkMessageSerializer,
          syncManager: SyncManager, pluginManager: IPluginManager, watchedTransactionManager: IWatchedTransactionManager, bip: Bip,
-         peerManager: IPeerManager, errorStorage: ErrorStorage) {
+         peerManager: IPeerManager) {
         self.storage = storage
         self.cache = cache
         self.dataProvider = dataProvider
         self.peerGroup = peerGroup
         self.initialBlockDownload = initialBlockDownload
         self.bloomFilterLoader = bloomFilterLoader
-        self.syncedReadyPeerManager = syncedReadyPeerManager
         self.transactionSyncer = transactionSyncer
-        self.blockValidatorChain = blockValidatorChain
         self.publicKeyManager = publicKeyManager
         self.addressConverter = addressConverter
         self.restoreKeyConverterChain = restoreKeyConverterChain
         self.unspentOutputSelector = unspentOutputSelector
-        self.kitStateProvider = kitStateProvider
         self.transactionCreator = transactionCreator
         self.transactionFeeCalculator = transactionFeeCalculator
         self.dustCalculator = dustCalculator
@@ -130,7 +115,6 @@ public class BitcoinCore {
         self.bip = bip
 
         self.peerManager = peerManager
-        self.errorStorage = errorStorage
     }
 
 }
@@ -158,29 +142,32 @@ extension BitcoinCore {
     }
 
     public var syncState: BitcoinCore.KitState {
-        kitStateProvider.syncState
+        syncManager.syncState
     }
 
     public func transactions(fromUid: String? = nil, limit: Int? = nil) -> Single<[TransactionInfo]> {
         dataProvider.transactions(fromUid: fromUid, limit: limit)
     }
 
-    public func send(to address: String, value: Int, feeRate: Int, pluginData: [UInt8: IPluginData] = [:]) throws -> FullTransaction {
-        do {
-            return try transactionCreator.create(to: address, value: value, feeRate: feeRate, senderPay: true, pluginData: pluginData)
-        } catch {
-            errorStorage.add(sendError: error)
-            throw error
-        }
+    public func transaction(hash: String) -> TransactionInfo? {
+        dataProvider.transaction(hash: hash)
     }
 
-    public func send(to hash: Data, scriptType: ScriptType, value: Int, feeRate: Int) throws -> FullTransaction {
+    public func send(to address: String, value: Int, feeRate: Int, sortType: TransactionDataSortType, pluginData: [UInt8: IPluginData] = [:]) throws -> FullTransaction {
+        try transactionCreator.create(to: address, value: value, feeRate: feeRate, senderPay: true, sortType: sortType, pluginData: pluginData)
+    }
+
+    public func send(to hash: Data, scriptType: ScriptType, value: Int, feeRate: Int, sortType: TransactionDataSortType) throws -> FullTransaction {
         let toAddress = try addressConverter.convert(keyHash: hash, type: scriptType)
-        return try transactionCreator.create(to: toAddress.stringValue, value: value, feeRate: feeRate, senderPay: true, pluginData: [:])
+        return try transactionCreator.create(to: toAddress.stringValue, value: value, feeRate: feeRate, senderPay: true, sortType: sortType, pluginData: [:])
     }
 
-    func redeem(from unspentOutput: UnspentOutput, to address: String, feeRate: Int) throws -> FullTransaction {
-        try transactionCreator.create(from: unspentOutput, to: address, feeRate: feeRate)
+    func redeem(from unspentOutput: UnspentOutput, to address: String, feeRate: Int, sortType: TransactionDataSortType) throws -> FullTransaction {
+        try transactionCreator.create(from: unspentOutput, to: address, feeRate: feeRate, sortType: sortType)
+    }
+
+    public func createRawTransaction(to address: String, value: Int, feeRate: Int, sortType: TransactionDataSortType, pluginData: [UInt8: IPluginData] = [:]) throws -> Data {
+        try transactionCreator.createRawTransaction(to: address, value: value, feeRate: feeRate, senderPay: true, sortType: sortType, pluginData: pluginData)
     }
 
     public func validate(address: String, pluginData: [UInt8: IPluginData] = [:]) throws {
@@ -240,13 +227,13 @@ extension BitcoinCore {
 
     public var statusInfo: [(String, Any)] {
         var status = [(String, Any)]()
+        status.append(("state", syncManager.syncState.toString()))
         status.append(("synced until", ((lastBlockInfo?.timestamp.map { Double($0) })?.map { Date(timeIntervalSince1970: $0) }) ?? "n/a"))
         status.append(("syncing peer", initialBlockDownload.syncPeer?.host ?? "n/a"))
         status.append(("derivation", bip.description))
-        status.append(("errors", errorStorage.errors))
 
         status.append(contentsOf:
-            peerManager.connected().enumerated().map { (index, peer) in
+            peerManager.connected.enumerated().map { (index, peer) in
                 var peerStatus = [(String, Any)]()
                 peerStatus.append(("status", initialBlockDownload.isSynced(peer: peer) ? "synced" : "not synced"))
                 peerStatus.append(("host", peer.host))
@@ -266,6 +253,10 @@ extension BitcoinCore {
         )
 
         return status
+    }
+
+    func rawTransaction(transactionHash: String) -> String? {
+        dataProvider.rawTransaction(transactionHash: transactionHash)
     }
 
 }
@@ -304,8 +295,8 @@ extension BitcoinCore: IDataProviderDelegate {
 
 }
 
-extension BitcoinCore: IKitStateProviderDelegate {
-    func handleKitStateUpdate(state: KitState) {
+extension BitcoinCore: ISyncManagerDelegate {
+    func kitStateUpdated(state: KitState) {
         delegateQueue.async { [weak self] in
             self?.delegate?.kitStateUpdated(state: state)
         }
@@ -334,15 +325,25 @@ extension BitcoinCore {
 
     public enum KitState {
         case synced
+        case apiSyncing(transactions: Int)
         case syncing(progress: Double)
-        case notSynced
+        case notSynced(error: Error)
+
+        func toString() -> String {
+            switch self {
+            case .synced: return "Synced"
+            case .apiSyncing(let transactions): return "ApiSyncing-\(transactions)"
+            case .syncing(let progress): return "Syncing-\(Int(progress * 100))"
+            case .notSynced(let error): return "NotSynced-\(String(reflecting: error))"
+            }
+        }
     }
 
     public enum SyncMode: Equatable {
-        case full                           // Sync from bip44CheckpointBlock. Api restore disabled
+        case full                           // Sync from bip44Checkpoint. Api restore disabled
         case fromDate(date: TimeInterval)   // Sync from given date. Api restore disable
-        case api                            // Sync from lastCheckpointBlock. Api restore enabled
-        case newWallet                      // Sync from lastCheckpointBlock. Api restore enabled
+        case api                            // Sync from lastCheckpoint. Api restore enabled
+        case newWallet                      // Sync from lastCheckpoint. Api restore enabled
     }
 
     public enum TransactionFilter {
@@ -352,17 +353,29 @@ extension BitcoinCore {
 
 }
 
-extension BitcoinCore.KitState {
+extension BitcoinCore.KitState: Equatable {
 
     public static func == (lhs: BitcoinCore.KitState, rhs: BitcoinCore.KitState) -> Bool {
         switch (lhs, rhs) {
-        case (.synced, .synced), (.notSynced, .notSynced):
+        case (.synced, .synced):
             return true
+        case (.apiSyncing(transactions: let leftCount), .apiSyncing(transactions: let rightCount)):
+            return leftCount == rightCount
         case (.syncing(progress: let leftProgress), .syncing(progress: let rightProgress)):
             return leftProgress == rightProgress
+        case (.notSynced(let lhsError), .notSynced(let rhsError)):
+            return "\(lhsError)" == "\(rhsError)"
         default:
             return false
         }
+    }
+
+}
+
+extension BitcoinCore {
+
+    public enum StateError: Error {
+        case notStarted
     }
 
 }

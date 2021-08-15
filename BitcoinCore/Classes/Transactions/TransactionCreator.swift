@@ -4,11 +4,11 @@ class TransactionCreator {
     }
 
     private let transactionBuilder: ITransactionBuilder
-    private let transactionProcessor: ITransactionProcessor
+    private let transactionProcessor: IPendingTransactionProcessor
     private let transactionSender: ITransactionSender
     private let bloomFilterManager: IBloomFilterManager
 
-    init(transactionBuilder: ITransactionBuilder, transactionProcessor: ITransactionProcessor, transactionSender: ITransactionSender, bloomFilterManager: IBloomFilterManager) {
+    init(transactionBuilder: ITransactionBuilder, transactionProcessor: IPendingTransactionProcessor, transactionSender: ITransactionSender, bloomFilterManager: IBloomFilterManager) {
         self.transactionBuilder = transactionBuilder
         self.transactionProcessor = transactionProcessor
         self.transactionSender = transactionSender
@@ -24,19 +24,20 @@ class TransactionCreator {
             bloomFilterManager.regenerateBloomFilter()
         }
 
-        try transactionSender.send(pendingTransaction: transaction)
+        transactionSender.send(pendingTransaction: transaction)
     }
 
 }
 
 extension TransactionCreator: ITransactionCreator {
 
-    func create(to address: String, value: Int, feeRate: Int, senderPay: Bool, pluginData: [UInt8: IPluginData] = [:]) throws -> FullTransaction {
+    func create(to address: String, value: Int, feeRate: Int, senderPay: Bool, sortType: TransactionDataSortType, pluginData: [UInt8: IPluginData] = [:]) throws -> FullTransaction {
         let transaction = try transactionBuilder.buildTransaction(
                 toAddress: address,
                 value: value,
                 feeRate: feeRate,
                 senderPay: senderPay,
+                sortType: sortType,
                 pluginData: pluginData
         )
 
@@ -44,11 +45,24 @@ extension TransactionCreator: ITransactionCreator {
         return transaction
     }
 
-    func create(from unspentOutput: UnspentOutput, to address: String, feeRate: Int) throws -> FullTransaction {
-        let transaction = try transactionBuilder.buildTransaction(from: unspentOutput, toAddress: address, feeRate: feeRate)
+    func create(from unspentOutput: UnspentOutput, to address: String, feeRate: Int, sortType: TransactionDataSortType) throws -> FullTransaction {
+        let transaction = try transactionBuilder.buildTransaction(from: unspentOutput, toAddress: address, feeRate: feeRate, sortType: sortType)
 
         try processAndSend(transaction: transaction)
         return transaction
+    }
+
+    func createRawTransaction(to address: String, value: Int, feeRate: Int, senderPay: Bool, sortType: TransactionDataSortType, pluginData: [UInt8: IPluginData] = [:]) throws -> Data {
+        let transaction = try transactionBuilder.buildTransaction(
+                toAddress: address,
+                value: value,
+                feeRate: feeRate,
+                senderPay: senderPay,
+                sortType: sortType,
+                pluginData: pluginData
+        )
+
+        return TransactionSerializer.serialize(transaction: transaction)
     }
 
 }

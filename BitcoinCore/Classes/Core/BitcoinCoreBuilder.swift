@@ -1,15 +1,15 @@
 import Foundation
 import HdWalletKit
+import HsToolKit
 
 public class BitcoinCoreBuilder {
-    public enum BuildError: Error { case noSeedData, noWalletId, noNetwork, noPaymentAddressParser, noAddressSelector, noStorage, noInitialSyncApi }
+    public enum BuildError: Error { case peerSizeLessThanRequired, noSeedData, noWalletId, noNetwork, noPaymentAddressParser, noAddressSelector, noStorage, noInitialSyncApi }
 
     // chains
     public let addressConverter = AddressConverterChain()
 
     // required parameters
     private var seed: Data?
-    private var words: [String]?
     private var bip: Bip = .bip44
     private var network: INetwork?
     private var paymentAddressParser: IPaymentAddressParser?
@@ -19,6 +19,7 @@ public class BitcoinCoreBuilder {
     private var logger: Logger
 
     private var blockHeaderHasher: IHasher?
+    private var blockValidator: IBlockValidator?
     private var transactionInfoConverter: ITransactionInfoConverter?
 
     // parameters with default values
@@ -31,11 +32,6 @@ public class BitcoinCoreBuilder {
 
     public func set(seed: Data) -> BitcoinCoreBuilder {
         self.seed = seed
-        return self
-    }
-
-    public func set(words: [String]) -> BitcoinCoreBuilder {
-        self.words = words
         return self
     }
 
@@ -69,7 +65,11 @@ public class BitcoinCoreBuilder {
         return self
     }
 
-    public func set(peerSize: Int) -> BitcoinCoreBuilder {
+    public func set(peerSize: Int) throws -> BitcoinCoreBuilder {
+        guard peerSize >= TransactionSender.minConnectedPeersCount else {
+            throw BuildError.peerSizeLessThanRequired
+        }
+
         self.peerCount = peerSize
         return self
     }
@@ -81,6 +81,11 @@ public class BitcoinCoreBuilder {
 
     public func set(blockHeaderHasher: IHasher) -> BitcoinCoreBuilder {
         self.blockHeaderHasher = blockHeaderHasher
+        return self
+    }
+
+    public func set(blockValidator: IBlockValidator) -> BitcoinCoreBuilder {
+        self.blockValidator = blockValidator
         return self
     }
 
@@ -99,16 +104,14 @@ public class BitcoinCoreBuilder {
         return self
     }
 
-    public init(minLogLevel: Logger.Level = .verbose) {
-        self.logger = Logger(network: network, minLogLevel: minLogLevel)
+    public init(logger: Logger) {
+        self.logger = logger
     }
 
     public func build() throws -> BitcoinCore {
         let seed: Data
         if let selfSeed = self.seed {
            seed = selfSeed
-        } else if let words = self.words {
-            seed = Mnemonic.seed(mnemonic: words)
         } else {
             throw BuildError.noSeedData
         }
@@ -159,12 +162,12 @@ public class BitcoinCoreBuilder {
         let transactionKeySetter = TransactionPublicKeySetter(storage: storage)
         let transactionOutputExtractor = TransactionOutputExtractor(transactionKeySetter: transactionKeySetter, pluginManager: pluginManager, logger: logger)
         let transactionAddressExtractor = TransactionOutputAddressExtractor(storage: storage, addressConverter: addressConverter)
-        let transactionProcessor = TransactionProcessor(storage: storage,
-                outputExtractor: transactionOutputExtractor, inputExtractor: transactionInputExtractor,
-                outputsCache: myOutputsCache, outputAddressExtractor: transactionAddressExtractor,
-                addressManager: publicKeyManager, irregularOutputFinder: irregularOutputFinder, transactionInfoConverter: transactionInfoConverter, transactionMediator: TransactionMediator(), listener: dataProvider)
-
-        let kitStateProvider = KitStateProvider()
+        let transactionExtractor = TransactionExtractor(outputExtractor: transactionOutputExtractor, inputExtractor: transactionInputExtractor, outputsCache: myOutputsCache, outputAddressExtractor: transactionAddressExtractor)
+        let transactionInvalidator = TransactionInvalidator(storage: storage, transactionInfoConverter: transactionInfoConverter, listener: dataProvider)
+        let transactionConflictResolver = TransactionConflictsResolver(storage: storage)
+        let transactionsProcessorQueue = DispatchQueue(label: "io.horizontalsystems.bitcoin-core.transaction-processor", qos: .background)
+        let blockTransactionProcessor = BlockTransactionProcessor(storage: storage, extractor: transactionExtractor, publicKeyManager: publicKeyManager, irregularOutputFinder: irregularOutputFinder, conflictsResolver: transactionConflictResolver, invalidator: transactionInvalidator, listener: dataProvider, queue: transactionsProcessorQueue)
+        let pendingTransactionProcessor = PendingTransactionProcessor(storage: storage, extractor: transactionExtractor, publicKeyManager: publicKeyManager, irregularOutputFinder: irregularOutputFinder, conflictsResolver: transactionConflictResolver, listener: dataProvider, queue: transactionsProcessorQueue)
 
         let peerDiscovery = PeerDiscovery()
         let peerAddressManager = PeerAddressManager(storage: storage, dnsSeeds: network.dnsSeeds, peerDiscovery: peerDiscovery, logger: logger)
@@ -173,45 +176,46 @@ public class BitcoinCoreBuilder {
 
         let peerManager = PeerManager()
         let unspentOutputSelector = UnspentOutputSelectorChain()
-        let transactionSyncer = TransactionSyncer(storage: storage, processor: transactionProcessor, publicKeyManager: publicKeyManager)
+        let transactionSyncer = TransactionSyncer(storage: storage, processor: pendingTransactionProcessor, invalidator: transactionInvalidator, publicKeyManager: publicKeyManager)
+
+        let checkpoint = BlockSyncer.resolveCheckpoint(network: network, syncMode: syncMode, storage: storage)
 
         let blockHashFetcher = BlockHashFetcher(restoreKeyConverter: restoreKeyConverterChain, apiManager: initialSyncApi, helper: BlockHashFetcherHelper())
-        let blockDiscovery = BlockDiscoveryBatch(network: network, wallet: hdWallet, blockHashFetcher: blockHashFetcher, logger: logger)
+        let blockDiscovery = BlockDiscoveryBatch(checkpoint: checkpoint, wallet: hdWallet, blockHashFetcher: blockHashFetcher, logger: logger)
 
-        let stateManager = StateManager(storage: storage, restoreFromApi: network.syncableFromApi && syncMode == BitcoinCore.SyncMode.api)
+        let stateManager = ApiSyncStateManager(storage: storage, restoreFromApi: network.syncableFromApi && syncMode == BitcoinCore.SyncMode.api)
 
-        let errorStorage = ErrorStorage()
-        let initialSyncer = InitialSyncer(storage: storage, listener: kitStateProvider, stateManager: stateManager, blockDiscovery: blockDiscovery, publicKeyManager: publicKeyManager, logger: logger, errorStorage: errorStorage)
+        let initialSyncer = InitialSyncer(storage: storage, blockDiscovery: blockDiscovery, publicKeyManager: publicKeyManager, logger: logger)
 
         let bloomFilterLoader = BloomFilterLoader(bloomFilterManager: bloomFilterManager, peerManager: peerManager)
         let watchedTransactionManager = WatchedTransactionManager()
 
-        let blockValidatorChain = BlockValidatorChain(proofOfWorkValidator: ProofOfWorkValidator(difficultyEncoder: DifficultyEncoder()))
-        let blockchain = Blockchain(storage: storage, blockValidator: blockValidatorChain, factory: factory, listener: dataProvider)
-        let checkpointBlock = BlockSyncer.checkpointBlock(network: network, syncMode: syncMode, storage: storage)
-        let blockSyncer = BlockSyncer.instance(storage: storage, checkpointBlock: checkpointBlock, factory: factory, listener: kitStateProvider, transactionProcessor: transactionProcessor, blockchain: blockchain, publicKeyManager: publicKeyManager, logger: logger)
-        let initialBlockDownload = InitialBlockDownload(blockSyncer: blockSyncer, peerManager: peerManager, merkleBlockValidator: merkleBlockValidator, syncStateListener: kitStateProvider, logger: logger)
+        let blockchain = Blockchain(storage: storage, blockValidator: blockValidator, factory: factory, listener: dataProvider)
+        let blockSyncer = BlockSyncer.instance(storage: storage, checkpoint: checkpoint, factory: factory, transactionProcessor: blockTransactionProcessor, blockchain: blockchain, publicKeyManager: publicKeyManager, logger: logger)
+        let initialBlockDownload = InitialBlockDownload(blockSyncer: blockSyncer, peerManager: peerManager, merkleBlockValidator: merkleBlockValidator, logger: logger)
 
         let peerGroup = PeerGroup(factory: factory, reachabilityManager: reachabilityManager,
                 peerAddressManager: peerAddressManager, peerCount: peerCount, localDownloadedBestBlockHeight: blockSyncer.localDownloadedBestBlockHeight,
                 peerManager: peerManager, logger: logger)
-        let syncedReadyPeerManager = SyncedReadyPeerManager(peerGroup: peerGroup, initialBlockDownload: initialBlockDownload, peerManager: peerManager)
+
+        let transactionDataSorterFactory = TransactionDataSorterFactory()
 
         let inputSigner = InputSigner(hdWallet: hdWallet, network: network)
         let transactionSizeCalculator = TransactionSizeCalculator()
         let dustCalculator = DustCalculator(dustRelayTxFee: network.dustRelayTxFee, sizeCalculator: transactionSizeCalculator)
-        let outputSetter = OutputSetter(addressConverter: addressConverter, factory: factory, pluginManager: pluginManager)
-        let inputSetter = InputSetter(unspentOutputSelector: unspentOutputSelector, transactionSizeCalculator: transactionSizeCalculator, addressConverter: addressConverter, publicKeyManager: publicKeyManager, factory: factory, pluginManager: pluginManager, dustCalculator: dustCalculator, changeScriptType: bip.scriptType)
+        let recipientSetter = RecipientSetter(addressConverter: addressConverter, pluginManager: pluginManager)
+        let outputSetter = OutputSetter(outputSorterFactory: transactionDataSorterFactory, factory: factory)
+        let inputSetter = InputSetter(unspentOutputSelector: unspentOutputSelector, transactionSizeCalculator: transactionSizeCalculator, addressConverter: addressConverter, publicKeyManager: publicKeyManager, factory: factory, pluginManager: pluginManager, dustCalculator: dustCalculator, changeScriptType: bip.scriptType, inputSorterFactory: transactionDataSorterFactory)
         let lockTimeSetter = LockTimeSetter(storage: storage)
         let transactionSigner = TransactionSigner(inputSigner: inputSigner)
-        let transactionBuilder = TransactionBuilder(outputSetter: outputSetter, inputSetter: inputSetter, lockTimeSetter: lockTimeSetter, signer: transactionSigner)
-        let transactionFeeCalculator = TransactionFeeCalculator(outputSetter: outputSetter, inputSetter: inputSetter, addressConverter: addressConverter, publicKeyManager: publicKeyManager, changeScriptType: bip.scriptType)
+        let transactionBuilder = TransactionBuilder(recipientSetter: recipientSetter, inputSetter: inputSetter, lockTimeSetter: lockTimeSetter, outputSetter: outputSetter, signer: transactionSigner)
+        let transactionFeeCalculator = TransactionFeeCalculator(recipientSetter: recipientSetter, inputSetter: inputSetter, addressConverter: addressConverter, publicKeyManager: publicKeyManager, changeScriptType: bip.scriptType)
         let transactionSendTimer = TransactionSendTimer(interval: 60)
-        let transactionSender = TransactionSender(transactionSyncer: transactionSyncer, syncedReadyPeerManager: syncedReadyPeerManager, storage: storage, timer: transactionSendTimer, logger: logger)
-        let transactionCreator = TransactionCreator(transactionBuilder: transactionBuilder, transactionProcessor: transactionProcessor, transactionSender: transactionSender, bloomFilterManager: bloomFilterManager)
+        let transactionSender = TransactionSender(transactionSyncer: transactionSyncer, initialBlockDownload: initialBlockDownload, peerManager: peerManager, storage: storage, timer: transactionSendTimer, logger: logger)
+        let transactionCreator = TransactionCreator(transactionBuilder: transactionBuilder, transactionProcessor: pendingTransactionProcessor, transactionSender: transactionSender, bloomFilterManager: bloomFilterManager)
         let mempoolTransactions = MempoolTransactions(transactionSyncer: transactionSyncer, transactionSender: transactionSender)
 
-        let syncManager = SyncManager(reachabilityManager: reachabilityManager, initialSyncer: initialSyncer, peerGroup: peerGroup)
+        let syncManager = SyncManager(reachabilityManager: reachabilityManager, initialSyncer: initialSyncer, peerGroup: peerGroup, apiSyncStateManager: stateManager, bestBlockHeight: blockSyncer.localDownloadedBestBlockHeight)
 
         let bitcoinCore = BitcoinCore(storage: storage,
                 cache: myOutputsCache,
@@ -219,14 +223,11 @@ public class BitcoinCoreBuilder {
                 peerGroup: peerGroup,
                 initialBlockDownload: initialBlockDownload,
                 bloomFilterLoader: bloomFilterLoader,
-                syncedReadyPeerManager: syncedReadyPeerManager,
                 transactionSyncer: transactionSyncer,
-                blockValidatorChain: blockValidatorChain,
                 publicKeyManager: publicKeyManager,
                 addressConverter: addressConverter,
                 restoreKeyConverterChain: restoreKeyConverterChain,
                 unspentOutputSelector: unspentOutputSelector,
-                kitStateProvider: kitStateProvider,
                 transactionCreator: transactionCreator,
                 transactionFeeCalculator: transactionFeeCalculator,
                 dustCalculator: dustCalculator,
@@ -237,14 +238,18 @@ public class BitcoinCoreBuilder {
                 pluginManager: pluginManager,
                 watchedTransactionManager: watchedTransactionManager,
                 bip: bip,
-                peerManager: peerManager,
-                errorStorage: errorStorage)
+                peerManager: peerManager)
 
         initialSyncer.delegate = syncManager
+        blockSyncer.listener = syncManager
+        initialBlockDownload.listener = syncManager
+        blockHashFetcher.listener = syncManager
+
         bloomFilterManager.delegate = bloomFilterLoader
         dataProvider.delegate = bitcoinCore
-        kitStateProvider.delegate = bitcoinCore
-        transactionProcessor.transactionListener = watchedTransactionManager
+        syncManager.delegate = bitcoinCore
+        blockTransactionProcessor.transactionListener = watchedTransactionManager
+        pendingTransactionProcessor.transactionListener = watchedTransactionManager
         transactionSendTimer.delegate = transactionSender
 
         bloomFilterManager.add(provider: watchedTransactionManager)
@@ -256,8 +261,8 @@ public class BitcoinCoreBuilder {
         peerGroup.inventoryItemsHandler = bitcoinCore.inventoryItemsHandlerChain
 
         bitcoinCore.prepend(addressConverter: Base58AddressConverter(addressVersion: network.pubKeyHash, addressScriptVersion: network.scriptHash))
-        bitcoinCore.prepend(unspentOutputSelector: UnspentOutputSelector(calculator: transactionSizeCalculator, provider: unspentOutputProvider))
-        bitcoinCore.prepend(unspentOutputSelector: UnspentOutputSelectorSingleNoChange(calculator: transactionSizeCalculator, provider: unspentOutputProvider))
+        bitcoinCore.prepend(unspentOutputSelector: UnspentOutputSelector(calculator: transactionSizeCalculator, provider: unspentOutputProvider, dustCalculator: dustCalculator))
+        bitcoinCore.prepend(unspentOutputSelector: UnspentOutputSelectorSingleNoChange(calculator: transactionSizeCalculator, provider: unspentOutputProvider, dustCalculator: dustCalculator))
         // this part can be moved to another place
 
         let blockHeaderParser = BlockHeaderParser(hasher: blockHeaderHasher ?? doubleShaHasher)
@@ -285,16 +290,12 @@ public class BitcoinCoreBuilder {
 
         bloomFilterLoader.subscribeTo(observable: peerGroup.observable)
         initialBlockDownload.subscribeTo(observable: peerGroup.observable)
-        syncedReadyPeerManager.subscribeTo(observable: peerGroup.observable)
         mempoolTransactions.subscribeTo(observable: peerGroup.observable)
-
 
         bitcoinCore.add(peerTaskHandler: initialBlockDownload)
         bitcoinCore.add(inventoryItemsHandler: initialBlockDownload)
 
-        syncedReadyPeerManager.subscribeTo(observable: initialBlockDownload.observable)
-        transactionSender.subscribeTo(observable: syncedReadyPeerManager.observable)
-
+        transactionSender.subscribeTo(observable: initialBlockDownload.observable)
 
         bitcoinCore.add(peerTaskHandler: transactionSender)
         bitcoinCore.add(peerTaskHandler: mempoolTransactions)

@@ -1,10 +1,12 @@
 import BigInt
 import RxSwift
-import Alamofire
+import HsToolKit
+import NIO
 
 enum BlockValidatorType { case header, bits, legacy, testNet, EDA, DAA, DGW }
 
 public protocol IDifficultyEncoder {
+    func compactFrom(hash: Data) -> Int
     func decodeCompact(bits: Int) -> BigInt
     func encodeCompact(from bigInt: BigInt) -> Int
 }
@@ -16,27 +18,22 @@ public protocol IBlockValidatorHelper {
 
 public protocol IBlockValidator: class {
     func validate(block: Block, previousBlock: Block) throws
-    func isBlockValidatable(block: Block, previousBlock: Block) -> Bool
 }
 
-protocol IBlockValidatorFactory {
-    func validator(for validatorType: BlockValidatorType) -> IBlockValidator
+public protocol IBlockChainedValidator: IBlockValidator {
+    func isBlockValidatable(block: Block, previousBlock: Block) -> Bool
 }
 
 protocol IHDWallet {
     var gapLimit: Int { get }
     func publicKey(account: Int, index: Int, external: Bool) throws -> PublicKey
+    func publicKeys(account: Int, indices: Range<UInt32>, external: Bool) throws -> [PublicKey]
     func privateKeyData(account: Int, index: Int, external: Bool) throws -> Data
 }
 
 protocol IApiConfigProvider {
     var reachabilityHost: String { get }
     var apiUrl: String { get }
-}
-
-protocol IReachabilityManager {
-    var isReachable: Bool { get }
-    var reachabilitySignal: Signal { get }
 }
 
 protocol IPeerAddressManager: class {
@@ -49,12 +46,12 @@ protocol IPeerAddressManager: class {
     func markConnected(peer: IPeer)
 }
 
-protocol IStateManager {
+protocol IApiSyncStateManager: AnyObject {
     var restored: Bool { get set }
 }
 
 protocol IBlockDiscovery {
-    func discoverBlockHashes(account: Int, external: Bool) -> Observable<([PublicKey], [BlockHash])>
+    func discoverBlockHashes(account: Int) -> Single<([PublicKey], [BlockHash])>
 }
 
 public protocol IStorage {
@@ -62,6 +59,7 @@ public protocol IStorage {
     func set(initialRestored: Bool)
 
     func leastScoreFastestPeerAddress(excludingIps: [String]) -> PeerAddress?
+    func peerAddressExist(address: String) -> Bool
     func save(peerAddresses: [PeerAddress])
     func increasePeerAddressScore(ip: String)
     func deletePeerAddress(byIp ip: String)
@@ -70,7 +68,7 @@ public protocol IStorage {
 
     var blockchainBlockHashes: [BlockHash] { get }
     var lastBlockchainBlockHash: BlockHash? { get }
-    func blockHashHeaderHashes(except: Data) -> [String]
+    func blockHashHeaderHashes(except: [Data]) -> [Data]
     var blockHashHeaderHashes: [Data] { get }
     var lastBlockHash: BlockHash? { get }
     func blockHashesSortedBySequenceAndHeight(limit: Int) -> [BlockHash]
@@ -87,9 +85,10 @@ public protocol IStorage {
     func save(block: Block)
     func blocks(heightGreaterThan: Int, sortedBy: Block.Columns, limit: Int) -> [Block]
     func blocks(from startHeight: Int, to endHeight: Int, ascending: Bool) -> [Block]
-    func blocks(byHexes: [String]) -> [Block]
+    func blocks(byHexes: [Data]) -> [Block]
     func blocks(heightGreaterThanOrEqualTo: Int, stale: Bool) -> [Block]
     func blocks(stale: Bool) -> [Block]
+    func blockByHeightStalePrioritized(height: Int) -> Block?
     func block(byHeight: Int) -> Block?
     func block(byHash: Data) -> Block?
     func block(stale: Bool, sortedHeight: String) -> Block?
@@ -99,23 +98,25 @@ public protocol IStorage {
     func timestamps(from startHeight: Int, to endHeight: Int) -> [Int]
 
     func transactionExists(byHash: Data) -> Bool
+    func fullTransaction(byHash hash: Data) -> FullTransaction?
     func transaction(byHash: Data) -> Transaction?
     func invalidTransaction(byHash: Data) -> InvalidTransaction?
-    func conflictingTransactions(for transaction: FullTransaction) -> [Transaction]
     func validOrInvalidTransaction(byUid: String) -> Transaction?
     func incomingPendingTransactionHashes() -> [Data]
     func incomingPendingTransactionsExist() -> Bool
     func inputs(byHashes hashes: [Data]) -> [Input]
     func transactions(ofBlock: Block) -> [Transaction]
-    func newTransactions() -> [Transaction]
+    func newTransactions() -> [FullTransaction]
     func newTransaction(byHash: Data) -> Transaction?
     func relayedTransactionExists(byHash: Data) -> Bool
     func add(transaction: FullTransaction) throws
+    func update(transaction: FullTransaction) throws
     func update(transaction: Transaction) throws
     func fullInfo(forTransactions: [TransactionWithBlock]) -> [FullTransactionForInfo]
     func validOrInvalidTransactionsFullInfo(fromTimestamp: Int?, fromOrder: Int?, limit: Int?) -> [FullTransactionForInfo]
     func transactionFullInfo(byHash hash: Data) -> FullTransactionForInfo?
     func moveTransactionsTo(invalidTransactions: [InvalidTransaction]) throws
+    func move(invalidTransaction: InvalidTransaction, toTransactions: FullTransaction) throws
 
     func outputsWithPublicKeys() -> [OutputWithPublicKey]
     func unspentOutputs() -> [UnspentOutput]
@@ -123,6 +124,7 @@ public protocol IStorage {
     func outputs(transactionHash: Data) -> [Output]
     func previousOutput(ofInput: Input) -> Output?
     func inputsUsingOutputs(withTransactionHash: Data) -> [Input]
+    func inputsUsing(previousOutputTxHash: Data, previousOutputIndex: Int) -> [Input]
 
     func sentTransaction(byHash: Data) -> SentTransaction?
     func update(sentTransaction: SentTransaction)
@@ -167,17 +169,19 @@ public protocol IPeerGroup: class {
 
     func start()
     func stop()
+    func reconnectPeers()
 
     func isReady(peer: IPeer) -> Bool
 }
 
 protocol IPeerManager: class {
+    var totalPeersCount: Int { get }
+    var connected: [IPeer] { get }
+    var sorted: [IPeer] { get }
+    var readyPeers: [IPeer] { get }
     func add(peer: IPeer)
     func peerDisconnected(peer: IPeer)
     func disconnectAll()
-    func totalPeersCount() -> Int
-    func connected() -> [IPeer]
-    func sorted() -> [IPeer]
 }
 
 public protocol IPeer: class {
@@ -222,7 +226,7 @@ public protocol IPeerTaskDelegate: class {
 protocol IPeerConnection: class {
     var delegate: PeerConnectionDelegate? { get set }
     var host: String { get }
-    var port: UInt32 { get }
+    var port: Int { get }
     var logName: String { get }
     func connect()
     func disconnect(error: Error?)
@@ -234,11 +238,12 @@ protocol IConnectionTimeoutManager: class {
     func timePeriodPassed(peer: IPeer)
 }
 
-protocol ISyncStateListener: class {
-    func syncFinished()
-    func syncStarted()
-    func syncStopped()
-    func initialBestBlockHeightUpdated(height: Int32)
+protocol IApiSyncListener: class {
+    func transactionsFound(count: Int)
+}
+
+public protocol IBlockSyncListener: class {
+    func blocksSyncFinished()
     func currentBestBlockHeightUpdated(height: Int32, maxBlockHeight: Int32)
 }
 
@@ -248,22 +253,23 @@ protocol IPeerAddressManagerDelegate: class {
 
 protocol IPeerDiscovery {
     var peerAddressManager: IPeerAddressManager? { get set }
-    func lookup(dnsSeed: String)
+    func lookup(dnsSeeds: [String])
 }
 
 protocol IFactory {
     func block(withHeader header: BlockHeader, previousBlock: Block) -> Block
     func block(withHeader header: BlockHeader, height: Int) -> Block
     func blockHash(withHeaderHash headerHash: Data, height: Int, order: Int) -> BlockHash
-    func peer(withHost host: String, logger: Logger?) -> IPeer
+    func peer(withHost host: String, eventLoopGroup: MultiThreadedEventLoopGroup, logger: Logger?) -> IPeer
     func transaction(version: Int, lockTime: Int) -> Transaction
     func inputToSign(withPreviousOutput: UnspentOutput, script: Data, sequence: Int) -> InputToSign
-    func output(withIndex index: Int, address: Address, value: Int, publicKey: PublicKey?) throws -> Output
+    func output(withIndex index: Int, address: Address, value: Int, publicKey: PublicKey?) -> Output
+    func nullDataOutput(data: Data) -> Output
     func bloomFilter(withElements: [Data]) -> BloomFilter
 }
 
 public protocol ISyncTransactionApi {
-    func getTransactions(addresses: [String]) -> Observable<[SyncTransactionItem]>
+    func getTransactions(addresses: [String]) -> Single<[SyncTransactionItem]>
 }
 
 protocol ISyncManager {
@@ -274,7 +280,7 @@ protocol ISyncManager {
 protocol IInitialSyncer {
     var delegate: IInitialSyncerDelegate? { get set }
     func sync()
-    func stop()
+    func terminate()
 }
 
 public protocol IHasher {
@@ -282,7 +288,7 @@ public protocol IHasher {
 }
 
 protocol IBlockHashFetcher {
-    func getBlockHashes(publicKeys: [PublicKey]) -> Observable<(responses: [BlockHash], lastUsedIndex: Int)>
+    func getBlockHashes(externalKeys: [PublicKey], internalKeys: [PublicKey]) -> Single<BlockHashesResponse>
 }
 
 protocol IBlockHashFetcherHelper {
@@ -290,7 +296,8 @@ protocol IBlockHashFetcherHelper {
 }
 
 protocol IInitialSyncerDelegate: class {
-    func syncingFinished()
+    func onSyncSuccess()
+    func onSyncFailed(error: Error)
 }
 
 protocol IPaymentAddressParser {
@@ -313,21 +320,32 @@ protocol IScriptExtractor: class {
 }
 
 protocol IOutputsCache: class {
-    func add(fromOutputs outputs: [Output])
+    func addMineOutputs(from outputs: [Output])
     func hasOutputs(forInputs inputs: [Input]) -> Bool
     func clear()
 }
 
-public protocol ITransactionProcessor: class {
-    var listener: IBlockchainDataListener? { get set }
-
-    func processReceived(transactions: [FullTransaction], inBlock block: Block?, skipCheckBloomFilter: Bool) throws
-    func processCreated(transaction: FullTransaction) throws
-    func processInvalid(transactionHash: Data, conflictingTxHash: Data?)
+protocol ITransactionInvalidator {
+    func invalidate(transaction: Transaction)
 }
 
-protocol ITransactionMediator {
-    func resolve(receivedTransaction transaction: FullTransaction, conflictingTransactions: [Transaction], updatingTransactions: inout [Transaction]) -> ConflictResolution
+protocol ITransactionConflictsResolver {
+    func transactionsConflicting(withInblockTransaction transaction: FullTransaction) -> [Transaction]
+    func transactionsConflicting(withPendingTransaction transaction: FullTransaction) -> [Transaction]
+    func incomingPendingTransactionsConflicting(with transaction: FullTransaction) -> [Transaction]
+}
+
+public protocol IBlockTransactionProcessor: class {
+    var listener: IBlockchainDataListener? { get set }
+
+    func processReceived(transactions: [FullTransaction], inBlock block: Block, skipCheckBloomFilter: Bool) throws
+}
+
+public protocol IPendingTransactionProcessor: class {
+    var listener: IBlockchainDataListener? { get set }
+
+    func processReceived(transactions: [FullTransaction], skipCheckBloomFilter: Bool) throws
+    func processCreated(transaction: FullTransaction) throws
 }
 
 protocol ITransactionExtractor {
@@ -354,13 +372,14 @@ public protocol ITransactionSyncer: class {
 }
 
 public protocol ITransactionCreator {
-    func create(to address: String, value: Int, feeRate: Int, senderPay: Bool, pluginData: [UInt8: IPluginData]) throws -> FullTransaction
-    func create(from: UnspentOutput, to address: String, feeRate: Int) throws -> FullTransaction
+    func create(to address: String, value: Int, feeRate: Int, senderPay: Bool, sortType: TransactionDataSortType, pluginData: [UInt8: IPluginData]) throws -> FullTransaction
+    func create(from: UnspentOutput, to address: String, feeRate: Int, sortType: TransactionDataSortType) throws -> FullTransaction
+    func createRawTransaction(to address: String, value: Int, feeRate: Int, senderPay: Bool, sortType: TransactionDataSortType, pluginData: [UInt8: IPluginData]) throws -> Data
 }
 
 protocol ITransactionBuilder {
-    func buildTransaction(toAddress: String, value: Int, feeRate: Int, senderPay: Bool, pluginData: [UInt8: IPluginData]) throws -> FullTransaction
-    func buildTransaction(from: UnspentOutput, toAddress: String, feeRate: Int) throws -> FullTransaction
+    func buildTransaction(toAddress: String, value: Int, feeRate: Int, senderPay: Bool, sortType: TransactionDataSortType, pluginData: [UInt8: IPluginData]) throws -> FullTransaction
+    func buildTransaction(from: UnspentOutput, toAddress: String, feeRate: Int, sortType: TransactionDataSortType) throws -> FullTransaction
 }
 
 protocol ITransactionFeeCalculator {
@@ -396,12 +415,12 @@ public protocol ITransactionSizeCalculator {
     func toBytes(fee: Int) -> Int
 }
 
-protocol IDustCalculator {
+public protocol IDustCalculator {
     func dust(type: ScriptType) -> Int
 }
 
 public protocol IUnspentOutputSelector {
-    func select(value: Int, feeRate: Int, outputScriptType: ScriptType, changeType: ScriptType, senderPay: Bool, dust: Int, pluginDataOutputSize: Int) throws -> SelectedUnspentOutputInfo
+    func select(value: Int, feeRate: Int, outputScriptType: ScriptType, changeType: ScriptType, senderPay: Bool, pluginDataOutputSize: Int) throws -> SelectedUnspentOutputInfo
 }
 
 public protocol IUnspentOutputProvider {
@@ -427,13 +446,8 @@ public protocol IBlockSyncer: class {
     func shouldRequestBlock(withHash hash: Data) -> Bool
 }
 
-protocol IKitStateProvider: class {
-    var syncState: BitcoinCore.KitState { get }
-    var delegate: IKitStateProviderDelegate? { get set }
-}
-
-protocol IKitStateProviderDelegate: class {
-    func handleKitStateUpdate(state: BitcoinCore.KitState)
+protocol ISyncManagerDelegate: class {
+    func kitStateUpdated(state: BitcoinCore.KitState)
 }
 
 public protocol ITransactionInfo: class {
@@ -452,6 +466,9 @@ protocol IDataProvider {
     var balance: BalanceInfo { get }
     func debugInfo(network: INetwork, scriptType: ScriptType, addressConverter: IAddressConverter) -> String
     func transactions(fromUid: String?, limit: Int?) -> Single<[TransactionInfo]>
+    func transaction(hash: String) -> TransactionInfo?
+
+    func rawTransaction(transactionHash: String) -> String?
 }
 
 protocol IDataProviderDelegate: class {
@@ -464,7 +481,6 @@ protocol IDataProviderDelegate: class {
 public protocol INetwork: class {
     var maxBlockSize: UInt32 { get }
     var protocolVersion: Int32 { get }
-    var name: String { get }
     var bundleName: String { get }
     var pubKeyHash: UInt8 { get }
     var privateKey: UInt8 { get }
@@ -473,11 +489,11 @@ public protocol INetwork: class {
     var xPubKey: UInt32 { get }
     var xPrivKey: UInt32 { get }
     var magic: UInt32 { get }
-    var port: UInt32 { get }
+    var port: Int { get }
     var dnsSeeds: [String] { get }
     var dustRelayTxFee: Int { get }
-    var bip44CheckpointBlock: Block { get }
-    var lastCheckpointBlock: Block { get }
+    var bip44Checkpoint: Checkpoint { get }
+    var lastCheckpoint: Checkpoint { get }
     var coinType: UInt32 { get }
     var sigHash: SigHashType { get }
     var syncableFromApi: Bool { get }
@@ -541,7 +557,7 @@ public protocol IPeerTaskHandler: class {
 
 protocol ITransactionSender {
     func verifyCanSend() throws
-    func send(pendingTransaction: FullTransaction) throws
+    func send(pendingTransaction: FullTransaction)
     func transactionsRelayed(transactions: [FullTransaction])
 }
 
@@ -609,12 +625,16 @@ public protocol IBlockMedianTimeHelper {
     func medianTimePast(block: Block) -> Int?
 }
 
+protocol IRecipientSetter {
+    func setRecipient(to mutableTransaction: MutableTransaction, toAddress: String, value: Int, pluginData: [UInt8: IPluginData], skipChecks: Bool) throws
+}
+
 protocol IOutputSetter {
-    func setOutputs(to mutableTransaction: MutableTransaction, toAddress: String, value: Int, pluginData: [UInt8: IPluginData], skipChecks: Bool) throws
+    func setOutputs(to mutableTransaction: MutableTransaction, sortType: TransactionDataSortType)
 }
 
 protocol IInputSetter {
-    func setInputs(to mutableTransaction: MutableTransaction, feeRate: Int, senderPay: Bool) throws
+    func setInputs(to mutableTransaction: MutableTransaction, feeRate: Int, senderPay: Bool, sortType: TransactionDataSortType) throws
     func setInputs(to mutableTransaction: MutableTransaction, fromUnspentOutput unspentOutput: UnspentOutput, feeRate: Int) throws
 }
 
@@ -630,4 +650,13 @@ public protocol IPluginData {
 }
 
 public protocol IPluginOutputData {
+}
+
+protocol ITransactionDataSorterFactory {
+    func sorter(for type: TransactionDataSortType) -> ITransactionDataSorter
+}
+
+protocol ITransactionDataSorter {
+    func sort(outputs: [Output]) -> [Output]
+    func sort(unspentOutputs: [UnspentOutput]) -> [UnspentOutput]
 }

@@ -1,5 +1,6 @@
 import RxSwift
 import GRDB
+import UIExtensions
 
 open class GrdbStorage {
     public var dbPool: DatabasePool
@@ -208,7 +209,68 @@ open class GrdbStorage {
             }
         }
 
+        migrator.registerMigration("addRawTransactionToTransactionAndInvalidTransaction") { db in
+            try db.alter(table: Transaction.databaseTableName) { t in
+                t.add(column: Transaction.Columns.rawTransaction.name, .text)
+            }
+            try db.alter(table: InvalidTransaction.databaseTableName) { t in
+                t.add(column: Transaction.Columns.rawTransaction.name, .text)
+            }
+        }
+
+        migrator.registerMigration("addFailedToSpendToOutputs") { db in
+            try db.alter(table: Output.databaseTableName) { t in
+                t.add(column: Output.Columns.failedToSpend.name, .boolean).notNull().defaults(to: false)
+            }
+        }
+
         return migrator
+    }
+
+    private func fullTransaction(transaction: Transaction) -> FullTransaction {
+        FullTransaction(
+                header: transaction,
+                inputs: inputs(transactionHash: transaction.dataHash),
+                outputs: outputs(transactionHash: transaction.dataHash)
+        )
+    }
+
+    private func addWithoutTransaction(transaction: FullTransaction, db: Database) throws {
+        try transaction.header.insert(db)
+
+        for input in transaction.inputs {
+            try input.insert(db)
+        }
+
+        for output in transaction.outputs {
+            try output.insert(db)
+        }
+    }
+
+    private func inputsWithPreviousOutputs(transactionHashes: [Data], db: Database) throws -> [InputWithPreviousOutput] {
+        var inputs = [InputWithPreviousOutput]()
+
+        let inputC = Input.Columns.allCases.count
+        let outputC = Output.Columns.allCases.count
+
+        let adapter = ScopeAdapter([
+            "input": RangeRowAdapter(0..<inputC),
+            "output": RangeRowAdapter(inputC..<inputC + outputC)
+        ])
+
+        let sql = """
+                  SELECT inputs.*, outputs.*
+                  FROM inputs
+                  LEFT JOIN outputs ON inputs.previousOutputTxHash = outputs.transactionHash AND inputs.previousOutputIndex = outputs."index"
+                  WHERE inputs.transactionHash IN (\(transactionHashes.map({ "x'" + $0.hex + "'" }).joined(separator: ",")))
+                  """
+        let rows = try Row.fetchCursor(db, sql: sql, adapter: adapter)
+
+        while let row = try rows.next() {
+            inputs.append(InputWithPreviousOutput(input: row["input"], previousOutput: row["output"]))
+        }
+
+        return inputs
     }
 
 }
@@ -238,6 +300,14 @@ extension GrdbStorage: IStorage {
                     .filter(!excludingIps.contains(PeerAddress.Columns.ip))
                     .order(PeerAddress.Columns.score.asc, PeerAddress.Columns.connectionTime.asc)
                     .fetchOne(db)
+        }
+    }
+
+    public func peerAddressExist(address: String) -> Bool {
+        try! dbPool.read { db in
+            try PeerAddress
+                    .filter(PeerAddress.Columns.ip == address)
+                    .fetchCount(db) > 0
         }
     }
 
@@ -306,13 +376,15 @@ extension GrdbStorage: IStorage {
         }
     }
 
-    public func blockHashHeaderHashes(except excludedHash: Data) -> [String] {
+    public func blockHashHeaderHashes(except excludedHashes: [Data]) -> [Data] {
         try! dbPool.read { db in
-            let rows = try Row.fetchCursor(db, sql: "SELECT headerHash from blockHashes WHERE headerHash != ?", arguments: [excludedHash])
-            var hexes = [String]()
+            let hashesExpression = excludedHashes.map { _ in "?" }.joined(separator: ",")
+            let hashesArgs = StatementArguments(excludedHashes)
+            let rows = try Row.fetchCursor(db, sql: "SELECT headerHash from blockHashes WHERE headerHash NOT IN (\(hashesExpression))", arguments: hashesArgs)
+            var hexes = [Data]()
 
             while let row = try rows.next() {
-                hexes.append(row[0] as String)
+                hexes.append(row[0] as Data)
             }
 
             return hexes
@@ -321,7 +393,7 @@ extension GrdbStorage: IStorage {
 
     public func blockHashesSortedBySequenceAndHeight(limit: Int) -> [BlockHash] {
         try! dbPool.read { db in
-            try BlockHash.order(BlockHash.Columns.sequence.asc).order(BlockHash.Columns.height.asc).limit(limit).fetchAll(db)
+            try BlockHash.order(BlockHash.Columns.sequence.asc, BlockHash.Columns.height.asc).limit(limit).fetchAll(db)
         }
     }
 
@@ -399,7 +471,7 @@ extension GrdbStorage: IStorage {
         }
     }
 
-    public func blocks(byHexes hexes: [String]) -> [Block] {
+    public func blocks(byHexes hexes: [Data]) -> [Block] {
         try! dbPool.read { db in
             try Block.filter(hexes.contains(Block.Columns.headerHash)).fetchAll(db)
         }
@@ -414,6 +486,12 @@ extension GrdbStorage: IStorage {
     public func blocks(stale: Bool) -> [Block] {
         try! dbPool.read { db in
             try Block.filter(Block.Columns.stale == stale).fetchAll(db)
+        }
+    }
+
+    public func blockByHeightStalePrioritized(height: Int) -> Block? {
+        try! dbPool.read { db in
+            try Block.filter(Block.Columns.height == height).order(Block.Columns.stale.desc).fetchOne(db)
         }
     }
 
@@ -481,6 +559,12 @@ extension GrdbStorage: IStorage {
     }
 
     // Transaction
+    public func fullTransaction(byHash hash: Data) -> FullTransaction? {
+        try! dbPool.read { db in
+            try Transaction.filter(Transaction.Columns.dataHash == hash).fetchOne(db)
+        }.flatMap { fullTransaction(transaction: $0) }
+    }
+
     public func transaction(byHash hash: Data) -> Transaction? {
         try! dbPool.read { db in
             try Transaction.filter(Transaction.Columns.dataHash == hash).fetchOne(db)
@@ -491,18 +575,6 @@ extension GrdbStorage: IStorage {
         try! dbPool.read { db in
             try InvalidTransaction.filter(Transaction.Columns.dataHash == hash).fetchOne(db)
         }
-    }
-
-    public func conflictingTransactions(for transaction: FullTransaction) -> [Transaction] {
-        let storageTransactionHashes = transaction.inputs.compactMap { input in
-            inputsUsing(previousOutputTxHash: input.previousOutputTxHash, previousOutputIndex: input.previousOutputIndex)
-                    .filter { $0.transactionHash != transaction.header.dataHash }.first?.transactionHash
-        }
-        guard !storageTransactionHashes.isEmpty else {
-            return []
-        }
-
-        return Array(Set(storageTransactionHashes)).compactMap { self.transaction(byHash: $0) }
     }
 
     public func validOrInvalidTransaction(byUid uid: String) -> Transaction? {
@@ -531,7 +603,10 @@ extension GrdbStorage: IStorage {
 
     public func incomingPendingTransactionHashes() -> [Data] {
         try! dbPool.read { db in
-            try Transaction.filter(Transaction.Columns.blockHash == nil).filter(Transaction.Columns.isOutgoing == false).fetchAll(db)
+            try Transaction
+                    .filter(Transaction.Columns.blockHash == nil)
+                    .filter(Transaction.Columns.isOutgoing == false)
+                    .fetchAll(db)
         }.map { $0.dataHash }
     }
 
@@ -561,10 +636,10 @@ extension GrdbStorage: IStorage {
         }
     }
 
-    public func newTransactions() -> [Transaction] {
+    public func newTransactions() -> [FullTransaction] {
         try! dbPool.read { db in
             try Transaction.filter(Transaction.Columns.status == TransactionStatus.new).fetchAll(db)
-        }
+        }.map { fullTransaction(transaction: $0) }
     }
 
     public func newTransaction(byHash hash: Data) -> Transaction? {
@@ -587,14 +662,18 @@ extension GrdbStorage: IStorage {
 
     public func add(transaction: FullTransaction) throws {
         _ = try! dbPool.write { db in
-            try transaction.header.insert(db)
+            try addWithoutTransaction(transaction: transaction, db: db)
+        }
+    }
 
+    public func update(transaction: FullTransaction) throws {
+        _ = try! dbPool.write { db in
+            try transaction.header.update(db)
             for input in transaction.inputs {
-                try input.insert(db)
+                try input.update(db)
             }
-
             for output in transaction.outputs {
-                try output.insert(db)
+                try output.update(db)
             }
         }
     }
@@ -612,26 +691,7 @@ extension GrdbStorage: IStorage {
 
         try! dbPool.read { db in
             for transactionHashChunks in transactionHashes.chunked(into: 999) {
-                let inputC = Input.Columns.allCases.count
-                let outputC = Output.Columns.allCases.count
-
-                let adapter = ScopeAdapter([
-                    "input": RangeRowAdapter(0..<inputC),
-                    "output": RangeRowAdapter(inputC..<inputC + outputC)
-                ])
-
-                let sql = """
-                          SELECT inputs.*, outputs.*
-                          FROM inputs
-                          LEFT JOIN outputs ON inputs.previousOutputTxHash = outputs.transactionHash AND inputs.previousOutputIndex = outputs."index"
-                          WHERE inputs.transactionHash IN (\(transactionHashChunks.map({ "x'" + $0.hex + "'" }).joined(separator: ",")))
-                          """
-                let rows = try Row.fetchCursor(db, sql: sql, adapter: adapter)
-
-                while let row = try rows.next() {
-                    inputs.append(InputWithPreviousOutput(input: row["input"], previousOutput: row["output"]))
-                }
-
+                inputs.append(contentsOf: try inputsWithPreviousOutputs(transactionHashes: transactionHashChunks, db: db))
                 outputs.append(contentsOf: try Output.filter(transactionHashChunks.contains(Output.Columns.transactionHash)).fetchAll(db))
             }
         }
@@ -717,7 +777,7 @@ extension GrdbStorage: IStorage {
                 let transaction: Transaction
 
                 if status == .invalid {
-                    let invalidTransaction: InvalidTransaction = row["transaction"] 
+                    let invalidTransaction: InvalidTransaction = row["transaction"]
                     transaction = invalidTransaction
                 } else {
                     transaction = row["transaction"]
@@ -736,10 +796,27 @@ extension GrdbStorage: IStorage {
             for invalidTransaction in invalidTransactions {
                 try invalidTransaction.insert(db)
 
+                let inputs = try inputsWithPreviousOutputs(transactionHashes: [invalidTransaction.dataHash], db: db)
+                for input in inputs {
+                    if let previousOutput = input.previousOutput {
+                        previousOutput.failedToSpend = true
+                        try previousOutput.update(db)
+                    }
+                }
+
                 try Input.filter(Input.Columns.transactionHash == invalidTransaction.dataHash).deleteAll(db)
                 try Output.filter(Output.Columns.transactionHash == invalidTransaction.dataHash).deleteAll(db)
                 try Transaction.filter(Transaction.Columns.dataHash == invalidTransaction.dataHash).deleteAll(db)
             }
+
+            return .commit
+        }
+    }
+
+    public func move(invalidTransaction: InvalidTransaction, toTransactions transaction: FullTransaction) throws {
+        try! dbPool.writeInTransaction { db in
+            try addWithoutTransaction(transaction: transaction, db: db)
+            try InvalidTransaction.filter(Transaction.Columns.uid == invalidTransaction.uid).deleteAll(db)
 
             return .commit
         }
@@ -842,7 +919,7 @@ extension GrdbStorage: IStorage {
         }
     }
 
-    private func inputsUsing(previousOutputTxHash: Data, previousOutputIndex: Int) -> [Input] {
+    public func inputsUsing(previousOutputTxHash: Data, previousOutputIndex: Int) -> [Input] {
         try! dbPool.read { db in
             try Input.filter(Input.Columns.previousOutputTxHash == previousOutputTxHash)
                     .filter(Input.Columns.previousOutputIndex == previousOutputIndex)

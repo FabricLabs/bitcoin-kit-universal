@@ -1,5 +1,6 @@
 import HdWalletKit
 import RxSwift
+import HsToolKit
 
 class InitialSyncer {
     weak var delegate: IInitialSyncerDelegate?
@@ -7,50 +8,36 @@ class InitialSyncer {
     private var disposeBag = DisposeBag()
 
     private let storage: IStorage
-    private let listener: ISyncStateListener
-    private var stateManager: IStateManager
     private let blockDiscovery: IBlockDiscovery
     private let publicKeyManager: IPublicKeyManager
 
     private let logger: Logger?
     private let async: Bool
-    private let errorStorage: ErrorStorage?
 
-    private var restoring = false
-
-    init(storage: IStorage, listener: ISyncStateListener, stateManager: IStateManager, blockDiscovery: IBlockDiscovery, publicKeyManager: IPublicKeyManager,
-         async: Bool = true, logger: Logger? = nil, errorStorage: ErrorStorage? = nil) {
+    init(storage: IStorage, blockDiscovery: IBlockDiscovery, publicKeyManager: IPublicKeyManager,
+         async: Bool = true, logger: Logger? = nil) {
         self.storage = storage
-        self.listener = listener
-        self.stateManager = stateManager
         self.blockDiscovery = blockDiscovery
         self.publicKeyManager = publicKeyManager
 
         self.logger = logger
         self.async = async
-        self.errorStorage = errorStorage
     }
 
     private func sync(forAccount account: Int) {
-        let externalObservable = blockDiscovery.discoverBlockHashes(account: account, external: true)
-        let internalObservable = blockDiscovery.discoverBlockHashes(account: account, external: false)
-
-        var observable = Observable
-                .concat(externalObservable, internalObservable)
-                .toArray()
+        var single = blockDiscovery.discoverBlockHashes(account: account)
                 .map { array -> ([PublicKey], [BlockHash]) in
-                    let (externalKeys, externalBlockHashes) = array[0]
-                    let (internalKeys, internalBlockHashes) = array[1]
-                    let sortedUniqueBlockHashes = Array<BlockHash>(externalBlockHashes + internalBlockHashes).unique.sorted { a, b in a.height < b.height }
+                    let (keys, blockHashes) = array
+                    let sortedUniqueBlockHashes = blockHashes.unique.sorted { a, b in a.height < b.height }
 
-                    return (externalKeys + internalKeys, sortedUniqueBlockHashes)
+                    return (keys, sortedUniqueBlockHashes)
                 }
 
         if async {
-            observable = observable.subscribeOn(ConcurrentDispatchQueueScheduler(qos: .background))
+            single = single.subscribeOn(ConcurrentDispatchQueueScheduler(qos: .background))
         }
-        
-        observable.subscribe(onSuccess: { [weak self] keys, responses in
+
+        single.subscribe(onSuccess: { [weak self] keys, responses in
                     self?.handle(forAccount: account, keys: keys, blockHashes: responses)
                 }, onError: { [weak self] error in
                     self?.handle(error: error)
@@ -64,19 +51,20 @@ class InitialSyncer {
 
         // If gap shift is found
         if blockHashes.isEmpty {
-            stateManager.restored = true
-            delegate?.syncingFinished()
+            handleSuccess()
         } else {
             storage.add(blockHashes: blockHashes)
             sync(forAccount: account + 1)
         }
     }
 
+    private func handleSuccess() {
+        delegate?.onSyncSuccess()
+    }
+
     private func handle(error: Error) {
-        stop()
-        logger?.error(error)
-        errorStorage?.add(apiError: error)
-        listener.syncStopped()
+        logger?.error(error, context: ["apiSync"], save: true)
+        delegate?.onSyncFailed(error: error)
     }
 
 }
@@ -84,23 +72,10 @@ class InitialSyncer {
 extension InitialSyncer: IInitialSyncer {
 
     func sync() {
-        guard !stateManager.restored else {
-            delegate?.syncingFinished()
-            return
-        }
-
-        guard !restoring else {
-            return
-        }
-        restoring = true
-
-        listener.syncStarted()
         sync(forAccount: 0)
     }
 
-    func stop() {
-        restoring = false
-        // Deinit old DisposeGag
+    func terminate() {
         disposeBag = DisposeBag()
     }
 

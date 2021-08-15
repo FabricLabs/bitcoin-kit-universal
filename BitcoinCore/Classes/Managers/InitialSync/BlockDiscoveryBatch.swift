@@ -1,6 +1,7 @@
 import Foundation
 import RxSwift
 import ObjectMapper
+import HsToolKit
 
 class BlockDiscoveryBatch {
     private let wallet: IHDWallet
@@ -9,35 +10,44 @@ class BlockDiscoveryBatch {
     private let maxHeight: Int
     private let gapLimit: Int
 
-    init(network: INetwork, wallet: IHDWallet, blockHashFetcher: IBlockHashFetcher, logger: Logger? = nil) {
+    init(checkpoint: Checkpoint, wallet: IHDWallet, blockHashFetcher: IBlockHashFetcher, logger: Logger? = nil) {
         self.wallet = wallet
         self.blockHashFetcher = blockHashFetcher
 
-        maxHeight = network.lastCheckpointBlock.height
+        maxHeight = checkpoint.block.height
         gapLimit = wallet.gapLimit
     }
 
-    private func fetchRecursive(account: Int, external: Bool, publicKeys: [PublicKey] = [], blockHashes: [BlockHash] = [], prevCount: Int = 0, prevLastUsedIndex: Int = -1, startIndex: Int = 0) -> Observable<([PublicKey], [BlockHash])> {
+    private func fetchRecursive(account: Int, blockHashes: [BlockHash] = [], externalBatchInfo: KeyBlockHashBatchInfo = KeyBlockHashBatchInfo(), internalBatchInfo: KeyBlockHashBatchInfo = KeyBlockHashBatchInfo()) -> Single<([PublicKey], [BlockHash])> {
         let maxHeight = self.maxHeight
 
-        let count = gapLimit - prevCount + prevLastUsedIndex + 1
-        var newPublicKeys = [PublicKey]()
-        for i in 0..<count {
-            do {
-                newPublicKeys.append(try wallet.publicKey(account: account, index: i + startIndex, external: external))
-            } catch {
-                return Observable.error(error)
-            }
-        }
-        return blockHashFetcher.getBlockHashes(publicKeys: newPublicKeys).flatMap { [weak self] fetcherResult -> Observable<([PublicKey], [BlockHash])> in
-            let resultBlockHashes = blockHashes + fetcherResult.responses.filter { $0.height <= maxHeight }
-            let resultPublicKeys = publicKeys + newPublicKeys
+        let externalCount = gapLimit - externalBatchInfo.prevCount + externalBatchInfo.prevLastUsedIndex + 1
+        let internalCount = gapLimit - internalBatchInfo.prevCount + internalBatchInfo.prevLastUsedIndex + 1
 
-            let finishObservable = Observable.just((resultPublicKeys, resultBlockHashes))
-            if fetcherResult.lastUsedIndex < 0 {
-                return finishObservable
+        var externalNewKeys = [PublicKey]()
+        var internalNewKeys = [PublicKey]()
+
+        do {
+            externalNewKeys.append(contentsOf: try wallet.publicKeys(account: account, indices: UInt32(externalBatchInfo.startIndex)..<UInt32(externalBatchInfo.startIndex + externalCount), external: true))
+            internalNewKeys.append(contentsOf: try wallet.publicKeys(account: account, indices: UInt32(internalBatchInfo.startIndex)..<UInt32(internalBatchInfo.startIndex + internalCount), external: false))
+        } catch {
+            return Single.error(error)
+        }
+
+        return blockHashFetcher.getBlockHashes(externalKeys: externalNewKeys, internalKeys: internalNewKeys).flatMap { [weak self] fetcherResponse -> Single<([PublicKey], [BlockHash])> in
+            let resultBlockHashes = blockHashes + fetcherResponse.blockHashes.filter { $0.height <= maxHeight }
+            let externalPublicKeys = externalBatchInfo.publicKeys + externalNewKeys
+            let internalPublicKeys = internalBatchInfo.publicKeys + internalNewKeys
+
+            let finishSingle = Single.just((externalPublicKeys + internalPublicKeys, resultBlockHashes))
+
+            if fetcherResponse.externalLastUsedIndex < 0 && fetcherResponse.internalLastUsedIndex < 0 {
+                return finishSingle
             } else {
-                return self?.fetchRecursive(account: account, external: external, publicKeys: resultPublicKeys, blockHashes: resultBlockHashes, prevCount: count, prevLastUsedIndex: fetcherResult.lastUsedIndex, startIndex: startIndex + count) ?? finishObservable
+                let externalBatch = KeyBlockHashBatchInfo(publicKeys: externalPublicKeys, prevCount: externalCount, prevLastUsedIndex: fetcherResponse.externalLastUsedIndex, startIndex: externalBatchInfo.startIndex + externalCount)
+                let internalBatch = KeyBlockHashBatchInfo(publicKeys: internalPublicKeys, prevCount: internalCount, prevLastUsedIndex: fetcherResponse.internalLastUsedIndex, startIndex: internalBatchInfo.startIndex + internalCount)
+
+                return self?.fetchRecursive(account: account, blockHashes: resultBlockHashes, externalBatchInfo: externalBatch, internalBatchInfo: internalBatch) ?? finishSingle
             }
         }
     }
@@ -46,8 +56,23 @@ class BlockDiscoveryBatch {
 
 extension BlockDiscoveryBatch: IBlockDiscovery {
 
-    func discoverBlockHashes(account: Int, external: Bool) -> Observable<([PublicKey], [BlockHash])> {
-        return fetchRecursive(account: account, external: external)
+    func discoverBlockHashes(account: Int) -> Single<([PublicKey], [BlockHash])> {
+        fetchRecursive(account: account)
+    }
+
+}
+
+class KeyBlockHashBatchInfo {
+    var publicKeys: [PublicKey]
+    var prevCount: Int
+    var prevLastUsedIndex: Int
+    var startIndex: Int
+
+    init(publicKeys: [PublicKey] = [], prevCount: Int = 0, prevLastUsedIndex: Int = -1, startIndex: Int = 0) {
+        self.publicKeys = publicKeys
+        self.prevCount = prevCount
+        self.prevLastUsedIndex = prevLastUsedIndex
+        self.startIndex = startIndex
     }
 
 }

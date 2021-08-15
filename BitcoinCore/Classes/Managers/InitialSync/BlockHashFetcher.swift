@@ -1,6 +1,8 @@
 import RxSwift
 
 class BlockHashFetcher {
+    weak var listener: IApiSyncListener?
+
     private let restoreKeyConverter: IRestoreKeyConverter
     private let apiManager: ISyncTransactionApi
     private let helper: IBlockHashFetcherHelper
@@ -15,24 +17,40 @@ class BlockHashFetcher {
 
 extension BlockHashFetcher: IBlockHashFetcher {
 
-    func getBlockHashes(publicKeys: [PublicKey]) -> Observable<(responses: [BlockHash], lastUsedIndex: Int)> {
-        let addresses = publicKeys.map {
+    func getBlockHashes(externalKeys: [PublicKey], internalKeys: [PublicKey]) -> Single<BlockHashesResponse> {
+        let externalAddresses = externalKeys.map {
             restoreKeyConverter.keysForApiRestore(publicKey: $0)
         }
 
-        return apiManager.getTransactions(addresses: addresses.flatMap { $0 }).map { [weak self] transactionResponses -> (responses: [BlockHash], lastUsedIndex: Int) in
+        let internalAddresses = internalKeys.map {
+            restoreKeyConverter.keysForApiRestore(publicKey: $0)
+        }
+
+        let allAddresses = externalAddresses.flatMap { $0 } + internalAddresses.flatMap { $0 }
+
+        return apiManager.getTransactions(addresses: allAddresses).map { [weak self] transactionResponses -> BlockHashesResponse in
             if transactionResponses.isEmpty {
-                return (responses: [], lastUsedIndex: -1)
+                return BlockHashesResponse(blockHashes: [], externalLastUsedIndex: -1, internalLastUsedIndex: -1)
             }
 
-            let lastUsedIndex = self?.helper.lastUsedIndex(addresses: addresses, outputs: transactionResponses.flatMap { $0.txOutputs })
+            self?.listener?.transactionsFound(count: transactionResponses.count)
+
+            let outputs = transactionResponses.flatMap { $0.txOutputs }
+            let externalLastUsedIndex = self?.helper.lastUsedIndex(addresses: externalAddresses, outputs: outputs)
+            let internalLastUsedIndex = self?.helper.lastUsedIndex(addresses: internalAddresses, outputs: outputs)
 
             let blockHashes: [BlockHash] = transactionResponses.compactMap {
                 BlockHash(headerHashReversedHex: $0.blockHash, height: $0.blockHeight, sequence: 0)
             }
 
-            return (responses: blockHashes, lastUsedIndex: lastUsedIndex ?? -1)
+            return BlockHashesResponse(blockHashes: blockHashes, externalLastUsedIndex: externalLastUsedIndex ?? -1, internalLastUsedIndex: internalLastUsedIndex ?? -1)
         }
     }
 
+}
+
+struct BlockHashesResponse {
+    let blockHashes: [BlockHash]
+    let externalLastUsedIndex: Int
+    let internalLastUsedIndex: Int
 }

@@ -1,4 +1,5 @@
 import OpenSslKit
+import UIExtensions
 
 public struct BlockHeader {
 
@@ -96,6 +97,16 @@ public struct FullTransactionForInfo {
     public let transactionWithBlock: TransactionWithBlock
     let inputsWithPreviousOutputs: [InputWithPreviousOutput]
     let outputs: [Output]
+
+    var rawTransaction: String {
+        let fullTransaction = FullTransaction(
+                header: transactionWithBlock.transaction,
+                inputs: inputsWithPreviousOutputs.map { $0.input },
+                outputs: outputs
+        )
+
+        return TransactionSerializer.serialize(transaction: fullTransaction).hex
+    }
 
 }
 

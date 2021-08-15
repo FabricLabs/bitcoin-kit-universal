@@ -1,6 +1,6 @@
 import BigInt
 
-public class LegacyDifficultyAdjustmentValidator: IBlockValidator {
+public class LegacyDifficultyAdjustmentValidator: IBlockChainedValidator {
     private let heightInterval: Int
     private let targetTimespan: Int
     private let maxTargetBits: Int
@@ -44,7 +44,7 @@ public class LegacyDifficultyAdjustmentValidator: IBlockValidator {
     }
 
     public func isBlockValidatable(block: Block, previousBlock: Block) -> Bool {
-        return block.height % heightInterval == 0
+        block.height % heightInterval == 0
     }
 
 }

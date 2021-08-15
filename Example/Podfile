@@ -1,4 +1,4 @@
-platform :ios, '11'
+platform :ios, '13'
 use_modular_headers!
 
 target 'BitcoinKitExample' do
@@ -6,7 +6,10 @@ target 'BitcoinKitExample' do
   pod 'BitcoinKit.swift', :path => '../'
   pod 'BitcoinCashKit.swift', :path => '../'
   pod 'DashKit.swift', :path => '../'
+  pod 'LitecoinKit.swift', :path => '../'
   pod 'Hodler.swift', :path => '../'
+  pod 'HsToolKit.swift', git: 'https://github.com/horizontalsystems/hs-tool-kit-ios'
+  pod 'UIExtensions.swift', git: 'https://github.com/horizontalsystems/gui-kit/'
 end
 
 def testPods

@@ -2,12 +2,14 @@ import Foundation
 
 public class TransactionSyncer {
     private let storage: IStorage
-    private let transactionProcessor: ITransactionProcessor
+    private let processor: IPendingTransactionProcessor
+    private let invalidator: TransactionInvalidator
     private let publicKeyManager: IPublicKeyManager
 
-    init(storage: IStorage, processor: ITransactionProcessor, publicKeyManager: IPublicKeyManager) {
+    init(storage: IStorage, processor: IPendingTransactionProcessor, invalidator: TransactionInvalidator, publicKeyManager: IPublicKeyManager) {
         self.storage = storage
-        self.transactionProcessor = processor
+        self.processor = processor
+        self.invalidator = invalidator
         self.publicKeyManager = publicKeyManager
     }
 
@@ -16,13 +18,7 @@ public class TransactionSyncer {
 extension TransactionSyncer: ITransactionSyncer {
 
     public func newTransactions() -> [FullTransaction] {
-        storage.newTransactions().map {
-            FullTransaction(
-                    header: $0,
-                    inputs: self.storage.inputs(transactionHash: $0.dataHash),
-                    outputs: self.storage.outputs(transactionHash: $0.dataHash)
-            )
-        }
+        storage.newTransactions()
     }
 
     public func handleRelayed(transactions: [FullTransaction]) {
@@ -33,7 +29,7 @@ extension TransactionSyncer: ITransactionSyncer {
         var needToUpdateBloomFilter = false
 
         do {
-            try self.transactionProcessor.processReceived(transactions: transactions, inBlock: nil, skipCheckBloomFilter: false)
+            try self.processor.processReceived(transactions: transactions, skipCheckBloomFilter: false)
         } catch _ as BloomFilterManager.BloomFilterExpired {
             needToUpdateBloomFilter = true
         } catch {
@@ -45,7 +41,7 @@ extension TransactionSyncer: ITransactionSyncer {
     }
 
     public func handleInvalid(fullTransaction: FullTransaction) {
-        transactionProcessor.processInvalid(transactionHash: fullTransaction.header.dataHash, conflictingTxHash: nil)
+        invalidator.invalidate(transaction: fullTransaction.header)
     }
 
     public func shouldRequestTransaction(hash: Data) -> Bool {
