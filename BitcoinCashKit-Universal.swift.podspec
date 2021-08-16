@@ -1,8 +1,8 @@
 Pod::Spec.new do |s|
   s.name             = 'BitcoinCashKit-Universal.swift'
   s.module_name      = 'BitcoinCashKit'
-  s.version          = '0.13.2'
-  s.summary          = 'BitcoinCash library for Swift. Supports iOS & OSX'
+  s.version          = '0.17'
+  s.summary          = 'BitcoinCash library for Swift. Supports iOS & macOS'
 
   s.description      = <<-DESC
 BitcoinCashKit implements BitcoinCash protocol in Swift. It is an implementation of the BitcoinCash SPV protocol written (almost) entirely in swift.
@@ -23,14 +23,13 @@ BitcoinCashKit implements BitcoinCash protocol in Swift. It is an implementation
 
   s.requires_arc = true
 
-  s.dependency 'BitcoinCore-Universal.swift', '~> 0.13.2'
-  s.dependency 'OpenSslKit-Universal.swift', '~> 1.0.1'
-  s.dependency 'Secp256k1Kit-Universal.swift', '~> 1.0.1'
+  s.dependency 'BitcoinCore-Universal.swift', '~> 0.17'
+  s.dependency 'OpenSslKit-Universal.swift', '~> 1.0'
+  s.dependency 'Secp256k1Kit-Universal.swift', '~> 1.0'
   s.dependency 'HdWalletKit-Universal.swift', '~> 1.5'
 
-  s.dependency 'Alamofire', '~> 4.0'
-  s.dependency 'ObjectMapper', '~> 3.0'
+  s.dependency 'ObjectMapper', '~> 4.0'
   s.dependency 'RxSwift', '~> 5.0'
-  s.dependency 'BigInt'
-  s.dependency 'GRDB.swift', '~> 4.0'
+  s.dependency 'BigInt', '~> 5.0'
+  s.dependency 'GRDB.swift', '~> 5.0'
 end

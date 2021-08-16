@@ -1,8 +1,8 @@
 Pod::Spec.new do |s|
   s.name             = 'BitcoinKit-Universal.swift'
   s.module_name      = 'BitcoinKit'
-  s.version          = '0.13.3'
-  s.summary          = 'Bitcoin library for Swift. Supports iOS & OSX'
+  s.version          = '0.17'
+  s.summary          = 'Bitcoin library for Swift. Supports iOS & macOS'
 
   s.description      = <<-DESC
 BitcoinKit implements Bitcoin protocol in Swift.
@@ -16,7 +16,6 @@ BitcoinKit implements Bitcoin protocol in Swift.
 
   s.ios.deployment_target = '11.0'
   s.osx.deployment_target = '10.14'
-
   s.swift_version = '5'
 
   s.source_files = 'BitcoinKit/Classes/**/*'
@@ -24,15 +23,14 @@ BitcoinKit implements Bitcoin protocol in Swift.
 
   s.requires_arc = true
 
-  s.dependency 'BitcoinCore-Universal.swift', '~> 0.13.2'
-  s.dependency 'Hodler-Universal.swift', '~> 0.13.2'
-  s.dependency 'OpenSslKit-Universal.swift', '~> 1.0.1'
-  s.dependency 'Secp256k1Kit-Universal.swift', '~> 1.0.1'
+  s.dependency 'BitcoinCore-Universal.swift', '~> 0.17'
+  s.dependency 'Hodler-Universal.swift', '~> 0.17'
+  s.dependency 'OpenSslKit-Universal.swift', '~> 1.0'
+  s.dependency 'Secp256k1Kit-Universal.swift', '~> 1.0'
   s.dependency 'HdWalletKit-Universal.swift', '~> 1.5'
 
-  s.dependency 'Alamofire', '~> 4.0'
-  s.dependency 'ObjectMapper', '~> 3.0'
+  s.dependency 'ObjectMapper', '~> 4.0'
   s.dependency 'RxSwift', '~> 5.0'
-  s.dependency 'BigInt'
-  s.dependency 'GRDB.swift', '~> 4.0'
+  s.dependency 'BigInt', '~> 5.0'
+  s.dependency 'GRDB.swift', '~> 5.0'
 end
