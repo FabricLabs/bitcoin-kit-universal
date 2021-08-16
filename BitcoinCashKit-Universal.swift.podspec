@@ -1,20 +1,21 @@
 Pod::Spec.new do |s|
-  s.name             = 'BitcoinCashKit.swift'
+  s.name             = 'BitcoinCashKit-Universal.swift'
   s.module_name      = 'BitcoinCashKit'
   s.version          = '0.17'
-  s.summary          = 'BitcoinCash library for Swift.'
+  s.summary          = 'BitcoinCash library for Swift. Supports iOS & macOS'
 
   s.description      = <<-DESC
 BitcoinCashKit implements BitcoinCash protocol in Swift. It is an implementation of the BitcoinCash SPV protocol written (almost) entirely in swift.
                        DESC
 
-  s.homepage         = 'https://github.com/horizontalsystems/bitcoin-kit-ios'
+  s.homepage         = 'https://github.com/cuhte3/bitcoin-kit-universal'
   s.license          = { :type => 'MIT', :file => 'LICENSE' }
-  s.author           = { 'Horizontal Systems' => 'hsdao@protonmail.ch' }
-  s.source           = { git: 'https://github.com/horizontalsystems/bitcoin-kit-ios.git', tag: "bitcoin-cash-#{s.version}" }
+  s.author           = { 'Horizontal Systems' => 'hsdao@protonmail.ch', 'cuhte3' => 'farid@getportal.co' }
+  s.source           = { git: 'https://github.com/cuhte3/bitcoin-kit-universal.git', tag: "bitcoin-cash-#{s.version}" }
   s.social_media_url = 'http://horizontalsystems.io/'
 
-  s.ios.deployment_target = '13.0'
+  s.ios.deployment_target = '11.0'
+  s.osx.deployment_target = '10.14'
   s.swift_version = '5'
 
   s.source_files = 'BitcoinCashKit/Classes/**/*'
@@ -22,10 +23,10 @@ BitcoinCashKit implements BitcoinCash protocol in Swift. It is an implementation
 
   s.requires_arc = true
 
-  s.dependency 'BitcoinCore.swift', '~> 0.17'
-  s.dependency 'OpenSslKit.swift', '~> 1.0'
-  s.dependency 'Secp256k1Kit.swift', '~> 1.0'
-  s.dependency 'HdWalletKit.swift', '~> 1.5'
+  s.dependency 'BitcoinCore-Universal.swift', '~> 0.17'
+  s.dependency 'OpenSslKit-Universal.swift', '~> 1.0'
+  s.dependency 'Secp256k1Kit-Universal.swift', '~> 1.0'
+  s.dependency 'HdWalletKit-Universal.swift', '~> 1.5'
 
   s.dependency 'ObjectMapper', '~> 4.0'
   s.dependency 'RxSwift', '~> 5.0'
